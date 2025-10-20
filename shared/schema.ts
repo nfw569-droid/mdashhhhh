@@ -21,8 +21,12 @@ export const personStatsSchema = z.object({
   peakDay: z.string(),
   peakDayCount: z.number(),
   longestStreak: z.number(),
+  // number of days with zero activity in the analysis window
+  zeroDays: z.number(),
+  longestZeroStreak: z.number(),
   quietestPeriod: z.string(),
   totalDays: z.number(),
+  totalCount: z.number(),
 });
 
 export type PersonStats = z.infer<typeof personStatsSchema>;

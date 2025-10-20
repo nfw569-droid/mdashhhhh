@@ -74,6 +74,31 @@ export function ChartsSection({ dataPoints, stats }: ChartsSectionProps) {
     },
   ];
 
+  // Zero-days per person (number of days with count === 0 in the analysis window)
+  const zeroDaysData = (() => {
+    if (!dataPoints || dataPoints.length === 0) return [{ person: 'J', zeros: 0 }, { person: 'A', zeros: 0 }, { person: 'M', zeros: 0 }];
+    const firstDateOrig = new Date(dataPoints[0].date);
+    const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
+    const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
+    const capEnd = new Date(2025, 9, 19);
+    const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+    const map: { [iso: string]: DataPoint } = {};
+    dataPoints.forEach(d => map[d.date] = d);
+    let jZeros = 0, aZeros = 0, mZeros = 0;
+    for (let d = new Date(analysisStart); d <= analysisEnd; d.setDate(d.getDate() + 1)) {
+      const iso = d.toISOString().split('T')[0];
+      const entry = map[iso] || { date: iso, J: 0, A: 0, M: 0 };
+      if ((entry.J || 0) === 0) jZeros++;
+      if ((entry.A || 0) === 0) aZeros++;
+      if ((entry.M || 0) === 0) mZeros++;
+    }
+    return [
+      { person: 'J', zeros: jZeros },
+      { person: 'A', zeros: aZeros },
+      { person: 'M', zeros: mZeros },
+    ];
+  })();
+
   const chartConfig = {
     style: {
       backgroundColor: 'transparent',
@@ -83,13 +108,28 @@ export function ChartsSection({ dataPoints, stats }: ChartsSectionProps) {
 
   // Day of week aggregation
   const dayOfWeekCounts = (() => {
-    const days: { [k: string]: number } = { Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 };
-    dataPoints.forEach(d => {
-      const dte = new Date(d.date);
-      const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      days[names[dte.getDay()]] += d.J + d.A + d.M;
-    });
-    return Object.entries(days).map(([day, total]) => ({ day, total }));
+    const dayNamesFull = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const dayNamesShort = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const days: Record<string, number> = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
+    if (dataPoints.length === 0) return dayNamesShort.map(d => ({ day: d, total: 0 }));
+
+    const firstDateOrig = new Date(dataPoints[0].date);
+    const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
+    const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
+    const capEnd = new Date(2025, 9, 19);
+    const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+    const map: { [iso: string]: DataPoint } = {};
+    dataPoints.forEach(d => map[d.date] = d);
+    for (let d = new Date(analysisStart); d <= analysisEnd; d.setDate(d.getDate() + 1)) {
+      const iso = d.toISOString().split('T')[0];
+      const entry = map[iso] || { date: iso, J: 0, A: 0, M: 0 };
+      const total = entry.J + entry.A + entry.M;
+      const weekday = d.getDay(); // 0=Sun .. 6=Sat
+      const monIndex = (weekday + 6) % 7; // convert to 0=Mon .. 6=Sun
+      const short = dayNamesShort[monIndex];
+      days[short] += total;
+    }
+    return dayNamesShort.map(d => ({ day: d, total: days[d] }));
   })();
 
   return (
@@ -216,6 +256,26 @@ export function ChartsSection({ dataPoints, stats }: ChartsSectionProps) {
                 <Bar dataKey="J" fill="hsl(var(--chart-1))" />
                 <Bar dataKey="A" fill="hsl(var(--chart-2))" />
                 <Bar dataKey="M" fill="hsl(var(--chart-3))" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Zero-days Chart */}
+      <Card data-testid="chart-zero-days">
+        <CardHeader>
+          <CardTitle>Zero-count Days per Person</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={zeroDaysData} {...chartConfig}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="person" stroke="hsl(var(--muted-foreground))" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                <YAxis stroke="hsl(var(--muted-foreground))" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', borderRadius: '6px', color: 'hsl(var(--foreground))' }} />
+                <Bar dataKey="zeros" fill="hsl(var(--chart-4))" />
               </BarChart>
             </ResponsiveContainer>
           </div>

@@ -75,10 +75,10 @@ function parseBackupSheet(workbook: XLSX.WorkBook): DataPoint[] {
             const row = data[i];
             if (!Array.isArray(row) || row.length === 0) continue;
             const dateValue = row[dateCol];
-            if (!dateValue) continue;
 
             let parsedDate: Date | null = null;
-            if (String(dateValue).includes('#')) {
+            // Treat missing or '###' as continuation
+            if (!dateValue || String(dateValue).includes('#')) {
                 if (lastValidDate) {
                     parsedDate = new Date(lastValidDate);
                     parsedDate.setDate(parsedDate.getDate() + 1);
@@ -104,21 +104,58 @@ function parseBackupSheet(workbook: XLSX.WorkBook): DataPoint[] {
     });
 
     return dataPoints;
+
 }
 
 function computeStatistics(dataPoints: DataPoint[]) {
     const persons: ('J' | 'A' | 'M')[] = ['J', 'A', 'M'];
     const stats: any = {};
-    const now = new Date();
+    if (dataPoints.length === 0) {
+        persons.forEach(person => {
+            stats[person] = {
+                person,
+                currentWeek: 0,
+                currentMonth: 0,
+                yearTotal: 0,
+                weeklyAvg: 0,
+                monthlyAvg: 0,
+                peakDay: '',
+                peakDayCount: 0,
+                longestStreak: 0,
+                longestZeroStreak: 0,
+                quietestPeriod: '',
+                totalDays: 0,
+                totalCount: 0,
+            } as PersonStats;
+        });
+        return stats as { J: PersonStats; A: PersonStats; M: PersonStats };
+    }
+
+    const firstDateOrig = new Date(dataPoints[0].date);
+    const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
+    const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
+    const capEnd = new Date(2025, 9, 19);
+    const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+    const now = new Date(analysisEnd);
     const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     const weekStart = new Date(now);
     weekStart.setDate(now.getDate() - 6);
     weekStart.setHours(0, 0, 0, 0);
-    const yearStart = new Date(now.getFullYear(), 0, 1);
+    const yearStartCandidate = new Date(now.getFullYear(), 0, 1);
+    const yearStart = analysisStart > yearStartCandidate ? analysisStart : yearStartCandidate;
+
+    const map: { [iso: string]: { J: number; A: number; M: number } } = {};
+    dataPoints.forEach(d => { map[d.date] = { J: d.J, A: d.A, M: d.M }; });
+    const timeline: { date: string; J: number; A: number; M: number }[] = [];
+    for (let d = new Date(analysisStart); d <= analysisEnd; d.setDate(d.getDate() + 1)) {
+        const iso = d.toISOString().split('T')[0];
+        const entry = map[iso] || { J: 0, A: 0, M: 0 };
+        timeline.push({ date: iso, J: entry.J, A: entry.A, M: entry.M });
+    }
 
     persons.forEach((person) => {
-        const personData = dataPoints.map((d) => ({ date: d.date, count: d[person] }));
+        const personData = timeline.map((t) => ({ date: t.date, count: t[person] }));
         const currentWeek = personData.filter((d) => {
             const date = new Date(d.date);
             return date >= weekStart && date <= now;
@@ -131,29 +168,24 @@ function computeStatistics(dataPoints: DataPoint[]) {
             const date = new Date(d.date);
             return date >= yearStart && date <= now;
         }).reduce((sum, d) => sum + d.count, 0);
-        const weeksCount = Math.max(1, Math.floor(dataPoints.length / 7));
-        const weeklyAvg = personData.reduce((sum, d) => sum + d.count, 0) / weeksCount;
-        const monthsCount = Math.max(1, Math.floor(dataPoints.length / 30));
-        const monthlyAvg = personData.reduce((sum, d) => sum + d.count, 0) / monthsCount;
-        const peakDay = personData.reduce((max, d) => d.count > max.count ? d : max, { date: '', count: 0 });
-        let longestStreak = 0;
-        let currentStreak = 0;
+        const totalDays = personData.length;
+        const totalCount = personData.reduce((s, d) => s + d.count, 0);
+        const zeroDays = personData.filter((d) => d.count === 0).length;
+        const weeks = totalDays / 7;
+        const months = totalDays / 30.436875;
+        const weeklyAvg = weeks > 0 ? totalCount / weeks : 0;
+        const monthlyAvg = months > 0 ? totalCount / months : 0;
+        const peakDay = personData.reduce((max, d) => d.count > max.count ? d : max, { date: '', count: -1 });
+        let longestStreak = 0; let currentStreak = 0; let longestZeroStreak = 0; let currentZeroStreak = 0;
         personData.forEach((d) => {
-            if (d.count > 0) {
-                currentStreak++;
-                longestStreak = Math.max(longestStreak, currentStreak);
-            } else {
-                currentStreak = 0;
-            }
+            if (d.count > 0) { currentStreak++; longestStreak = Math.max(longestStreak, currentStreak); currentZeroStreak = 0; }
+            else { currentZeroStreak++; longestZeroStreak = Math.max(longestZeroStreak, currentZeroStreak); currentStreak = 0; }
         });
         let quietestPeriod = '';
         let minWeeklyTotal = Infinity;
         for (let i = 0; i <= personData.length - 7; i++) {
             const weekTotal = personData.slice(i, i + 7).reduce((sum, d) => sum + d.count, 0);
-            if (weekTotal < minWeeklyTotal) {
-                minWeeklyTotal = weekTotal;
-                quietestPeriod = personData[i].date;
-            }
+            if (weekTotal < minWeeklyTotal) { minWeeklyTotal = weekTotal; quietestPeriod = personData[i].date; }
         }
         stats[person] = {
             person,
@@ -162,11 +194,14 @@ function computeStatistics(dataPoints: DataPoint[]) {
             yearTotal,
             weeklyAvg,
             monthlyAvg,
-            peakDay: peakDay.date || dataPoints[0]?.date || '',
-            peakDayCount: peakDay.count,
+            peakDay: peakDay.date || timeline[0].date,
+            peakDayCount: peakDay.count < 0 ? 0 : peakDay.count,
             longestStreak,
-            quietestPeriod: quietestPeriod || dataPoints[0]?.date || '',
+            longestZeroStreak,
+            zeroDays,
+            quietestPeriod: quietestPeriod || timeline[0].date,
             totalDays: personData.filter((d) => d.count > 0).length,
+            totalCount,
         } as PersonStats;
     });
 
@@ -175,29 +210,61 @@ function computeStatistics(dataPoints: DataPoint[]) {
 
 function generateInsights(dataPoints: DataPoint[], stats: { J: PersonStats; A: PersonStats; M: PersonStats }) {
     const insights: Insight[] = [];
-    const totals = { J: stats.J.yearTotal, A: stats.A.yearTotal, M: stats.M.yearTotal };
+    const totals = { J: stats.J.totalCount, A: stats.A.totalCount, M: stats.M.totalCount };
     const leader = Object.entries(totals).reduce((max, [person, total]) => total > max.total ? { person, total } : max, { person: 'J', total: 0 });
     insights.push({ type: 'comparison', title: `${leader.person} is the most active overall`, description: `With a total of ${leader.total} across the entire period`, metric: `${leader.total} total`, person: leader.person as 'J' | 'A' | 'M' });
     const bestStreak = Object.entries(stats).reduce((max, [person, stat]) => stat.longestStreak > max.streak ? { person, streak: stat.longestStreak } : max, { person: 'J', streak: 0 });
     insights.push({ type: 'streak', title: `${bestStreak.person} has the longest streak`, description: `Maintained consistency for ${bestStreak.streak} consecutive days`, metric: `${bestStreak.streak} days`, person: bestStreak.person as 'J' | 'A' | 'M' });
+    // Longest zero (dry) streak
+    const bestZero = Object.entries(stats).reduce((max, [person, stat]) => stat.longestZeroStreak > max.streak ? { person, streak: stat.longestZeroStreak } : max, { person: 'J', streak: 0 });
+    if (bestZero.streak > 0) {
+        insights.push({ type: 'streak', title: `${bestZero.person} had the longest dry streak`, description: `A longest run of ${bestZero.streak} consecutive days with zero activity`, metric: `${bestZero.streak} days`, person: bestZero.person as 'J' | 'A' | 'M' });
+    }
     const monthlyLeader = Object.entries(stats).reduce((max, [person, stat]) => stat.currentMonth > max.count ? { person, count: stat.currentMonth } : max, { person: 'J', count: 0 });
     insights.push({ type: 'peak', title: `${monthlyLeader.person} is leading this month`, description: `Most active in the current month with ${monthlyLeader.count} total`, metric: `${monthlyLeader.count} this month`, person: monthlyLeader.person as 'J' | 'A' | 'M' });
-    const dayOfWeekCounts: { [key: string]: number } = {};
-    dataPoints.forEach((d) => {
-        const dayName = new Date(d.date).toLocaleDateString('en-US', { weekday: 'long' });
-        const total = d.J + d.A + d.M;
-        dayOfWeekCounts[dayName] = (dayOfWeekCounts[dayName] || 0) + total;
-    });
+    // Day of week aggregation Monday->Sunday over analysis window
+    const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const dayOfWeekCounts: { [key: string]: number } = { Monday: 0, Tuesday: 0, Wednesday: 0, Thursday: 0, Friday: 0, Saturday: 0, Sunday: 0 };
+    if (dataPoints.length > 0) {
+        const firstDateOrig = new Date(dataPoints[0].date);
+        const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
+        const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
+        const capEnd = new Date(2025, 9, 19);
+        const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+        const map: { [iso: string]: DataPoint } = {};
+        dataPoints.forEach(d => map[d.date] = d);
+        for (let d = new Date(analysisStart); d <= analysisEnd; d.setDate(d.getDate() + 1)) {
+            const iso = d.toISOString().split('T')[0];
+            const entry = map[iso] || { date: iso, J: 0, A: 0, M: 0 };
+            const total = entry.J + entry.A + entry.M;
+            const weekday = d.getDay();
+            const monIndex = (weekday + 6) % 7; // 0=Mon .. 6=Sun
+            dayOfWeekCounts[dayNames[monIndex]] += total;
+        }
+    }
     const peakDayOfWeek = Object.entries(dayOfWeekCounts).reduce((max, [day, count]) => count > max.count ? { day, count } : max, { day: '', count: 0 });
     insights.push({ type: 'pattern', title: `${peakDayOfWeek.day}s are the most active`, description: `Overall activity peaks on ${peakDayOfWeek.day}s across all individuals`, metric: `${peakDayOfWeek.count} total` });
-    const last7Days = dataPoints.slice(-7);
-    const prev7Days = dataPoints.slice(-14, -7);
+    // for recent trend, use timeline to include missing days as zeros
+    const firstDate = new Date(dataPoints[0].date);
+    const lastDate = new Date(dataPoints[dataPoints.length - 1].date);
+    const map: { [iso: string]: DataPoint } = {};
+    dataPoints.forEach(d => map[d.date] = d);
+    const timeline: DataPoint[] = [];
+    for (let d = new Date(firstDate); d <= lastDate; d.setDate(d.getDate() + 1)) {
+        const iso = d.toISOString().split('T')[0];
+        timeline.push(map[iso] || { date: iso, J: 0, A: 0, M: 0 });
+    }
+    const last7Days = timeline.slice(-7);
+    const prev7Days = timeline.slice(-14, -7);
     const recentTotal = last7Days.reduce((sum, d) => sum + d.J + d.A + d.M, 0);
     const previousTotal = prev7Days.reduce((sum, d) => sum + d.J + d.A + d.M, 0);
     const change = recentTotal - previousTotal;
     if (Math.abs(change) > 5) {
-        insights.push({ type: change > 0 ? 'pattern' : 'anomaly', title: change > 0 ? 'Activity increasing recently' : 'Activity decreasing recently', description: `Overall activity ${change > 0 ? 'increased' : 'decreased'} by ${Math.abs(change)} in the last week compared to the previous week`, metric: `${change > 0 ? '+' : ''}${change}` });
+        insights.push({ type: change > 0 ? 'pattern' : 'anomaly', title: change > 0 ? 'Activity increasing recently' : 'Activity decreasing recently', description: `Overall activity ${change > 0 ? 'increased' : 'decreased'} by ${Math.abs(change)} in the last week compared to the previous week. Compares the last 7 calendar days vs the previous 7-day block.`, metric: `${change > 0 ? '+' : ''}${change}` });
     }
+
+    // Zero-day counts insight (how many calendar days each person had zero activity)
+    insights.push({ type: 'pattern', title: 'Days with zero activity', description: `Counts of calendar days with zero activity per person (within analysis window).`, metric: `J:${stats.J.zeroDays} A:${stats.A.zeroDays} M:${stats.M.zeroDays}` });
 
     // Additional creative insights
     // Volatility: standard deviation of daily totals
@@ -250,8 +317,15 @@ export async function parseExcelArrayBuffer(buffer: ArrayBuffer): Promise<Parsed
     const workbook = XLSX.read(buffer, { type: 'array' });
     const history = parseHistorySheet(workbook);
     const backup = parseBackupSheet(workbook);
-    const allData = [...history, ...backup].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    const uniqueData = Array.from(new Map(allData.map((item) => [item.date, item])).values());
+    const allData = [...history, ...backup];
+    const combinedMap: Record<string, { date: string; J: number; A: number; M: number }> = {};
+    allData.forEach(item => {
+        if (!combinedMap[item.date]) combinedMap[item.date] = { date: item.date, J: 0, A: 0, M: 0 };
+        combinedMap[item.date].J += Number(item.J || 0);
+        combinedMap[item.date].A += Number(item.A || 0);
+        combinedMap[item.date].M += Number(item.M || 0);
+    });
+    const uniqueData = Object.values(combinedMap).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     const today = new Date();
     today.setHours(23, 59, 59, 999);
     const validData = uniqueData.filter((d) => new Date(d.date) <= today);
@@ -268,8 +342,15 @@ export async function parseFile(file: File): Promise<ParsedData> {
         const workbook = XLSX.read(text, { type: 'string' });
         const history = parseHistorySheet(workbook);
         const backup = parseBackupSheet(workbook);
-        const allData = [...history, ...backup].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-        const uniqueData = Array.from(new Map(allData.map((item) => [item.date, item])).values());
+        const allData = [...history, ...backup];
+        const combinedMap: Record<string, { date: string; J: number; A: number; M: number }> = {};
+        allData.forEach(item => {
+            if (!combinedMap[item.date]) combinedMap[item.date] = { date: item.date, J: 0, A: 0, M: 0 };
+            combinedMap[item.date].J += Number(item.J || 0);
+            combinedMap[item.date].A += Number(item.A || 0);
+            combinedMap[item.date].M += Number(item.M || 0);
+        });
+        const uniqueData = Object.values(combinedMap).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
         const today = new Date();
         today.setHours(23, 59, 59, 999);
         const validData = uniqueData.filter((d) => new Date(d.date) <= today);
