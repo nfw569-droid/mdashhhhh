@@ -8,30 +8,36 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Loader2, AlertCircle } from "lucide-react";
 import type { ParsedData } from "@shared/schema";
 import { FileUpload } from "@/components/FileUpload";
+import { fetchAndParseGoogleSheet } from "@/lib/parseExcel";
 
 export default function Dashboard() {
   const [data, setData] = useState<ParsedData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   useEffect(() => {
-    // Try to fetch parsed data from server API (which fetches the Google Sheet)
-    const tryLoad = async () => {
+    // Fetch and parse Google Sheet directly
+    const loadData = async () => {
       try {
         setIsLoading(true);
-        const resp = await fetch('http://localhost:5000/api/data');
-        if (!resp.ok) throw new Error('Failed to fetch data from server');
-        const parsed = await resp.json() as ParsedData;
+        const parsed = await fetchAndParseGoogleSheet();
         setData(parsed);
+        setLastRefresh(new Date());
+        setError(null);
       } catch (e) {
         console.error('Failed to fetch data:', e);
-        setError(e instanceof Error ? e : new Error('Failed to fetch data from server'));
+        setError(e instanceof Error ? e : new Error('Failed to fetch Google Sheet'));
       } finally {
         setIsLoading(false);
       }
     };
 
-    tryLoad();
+    loadData();
+
+    // Refresh every 12 hours
+    const interval = setInterval(loadData, 12 * 60 * 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleDataParsed = (parsed: ParsedData, fileName: string) => {
@@ -46,7 +52,12 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Header fileName={data ? '23-24data.xlsx' : ''} onReset={handleReset} hasData={!!data} />
+      <Header
+        fileName={data ? '23-24data.xlsx' : ''}
+        onReset={handleReset}
+        hasData={!!data}
+        lastRefresh={lastRefresh}
+      />
 
       <main className="max-w-7xl mx-auto px-6 pb-12">
         {isLoading ? (

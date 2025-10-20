@@ -7,9 +7,10 @@ interface HeaderProps {
   fileName: string;
   onReset: () => void;
   hasData: boolean;
+  lastRefresh?: Date;
 }
 
-export function Header({ fileName, onReset, hasData }: HeaderProps) {
+export function Header({ fileName, onReset, hasData, lastRefresh }: HeaderProps) {
   const { status } = useRefreshStatus();
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
@@ -38,12 +39,10 @@ export function Header({ fileName, onReset, hasData }: HeaderProps) {
                   {fileName}
                 </span>
               )}
-              {status && (
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                  <RefreshCw className="h-3 w-3" />
-                  Last updated: {new Date(status.lastRefresh).toLocaleString()}
-                </span>
-              )}
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <RefreshCw className="h-3 w-3" />
+                {lastRefresh ? `Last updated: ${lastRefresh.toLocaleString()}` : 'Loading...'}
+              </span>
             </div>
           </div>
 

@@ -2,6 +2,51 @@ import * as XLSX from 'xlsx';
 import type { ParsedData, DataPoint, PersonStats, Insight } from '@shared/schema';
 
 const ANALYSIS_START = new Date(2023, 6, 10); // July 10, 2023
+const GOOGLE_SHEET_ID = '1ySZREUibTSLKv8YgJ08wo-FJlBjPrB86RJ9lWpZnH1k';
+
+// Function to fetch and parse Google Sheet directly
+export async function fetchAndParseGoogleSheet(): Promise<ParsedData> {
+    const url = `https://docs.google.com/spreadsheets/d/${GOOGLE_SHEET_ID}/export?format=xlsx`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Failed to fetch Google Sheet');
+    const buffer = await response.arrayBuffer();
+    const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+
+    const historyData = parseHistorySheet(workbook);
+    const backupData = parseBackupSheet(workbook);
+
+    const combinedMap: Record<string, { date: string; J: number; A: number; M: number }> = {};
+    [...historyData, ...backupData].forEach(item => {
+        if (!combinedMap[item.date]) combinedMap[item.date] = { date: item.date, J: 0, A: 0, M: 0 };
+        combinedMap[item.date].J += Number(item.J || 0);
+        combinedMap[item.date].A += Number(item.A || 0);
+        combinedMap[item.date].M += Number(item.M || 0);
+    });
+
+    const uniqueData = Object.values(combinedMap)
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // Filter out future dates
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    const validData = uniqueData.filter(d => new Date(d.date) <= today);
+
+    const stats = computeStatistics(validData);
+    const insights = generateInsights(validData, stats);
+
+    const analysisEnd = new Date();
+    analysisEnd.setHours(23, 59, 59, 999);
+
+    return {
+        dataPoints: validData,
+        stats,
+        insights,
+        dateRange: {
+            start: ANALYSIS_START.toISOString().split('T')[0],
+            end: analysisEnd.toISOString().split('T')[0],
+        }
+    };
+}
 
 function parseHistorySheet(workbook: XLSX.WorkBook): DataPoint[] {
     const sheet = workbook.Sheets['history'];
