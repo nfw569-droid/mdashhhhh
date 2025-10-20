@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { OverviewCards } from "@/components/OverviewCards";
 import { InsightsPanel } from "@/components/InsightsPanel";
 import { ChartsSection } from "@/components/ChartsSection";
@@ -7,16 +7,52 @@ import { Header } from "@/components/Header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loader2, AlertCircle } from "lucide-react";
 import type { ParsedData } from "@shared/schema";
+import { FileUpload } from "@/components/FileUpload";
 
 export default function Dashboard() {
-  const { data, isLoading, error } = useQuery<ParsedData>({
-    queryKey: ["/api/data"],
-  });
+  const [data, setData] = useState<ParsedData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    // Try to fetch the static Excel file from attached_assets via the client build
+    // In development Vite will serve the file from /attached_assets/...
+    const tryLoad = async () => {
+      try {
+        setIsLoading(true);
+        const base = (import.meta as any).env?.BASE_URL || '/';
+        const url = `${base}attached_assets/23-24data_1760901829734.xlsx`;
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('Static asset not available');
+        const buffer = await resp.arrayBuffer();
+        const { parseExcelArrayBuffer } = await import('@/lib/parseExcel');
+        const parsed = await parseExcelArrayBuffer(buffer);
+        setData(parsed);
+      } catch (e) {
+        // ignore and let user upload
+        setError(null);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    tryLoad();
+  }, []);
+
+  const handleDataParsed = (parsed: ParsedData, fileName: string) => {
+    setData(parsed);
+    setError(null);
+  };
+
+  const handleReset = () => {
+    setData(null);
+    setError(null);
+  };
 
   return (
     <div className="min-h-screen bg-background">
-      <Header fileName="23-24data.xlsx" onReset={() => {}} hasData={!!data} />
-      
+      <Header fileName={data ? '23-24data.xlsx' : ''} onReset={handleReset} hasData={!!data} />
+
       <main className="max-w-7xl mx-auto px-6 pb-12">
         {isLoading ? (
           <div className="flex items-center justify-center min-h-[80vh]">
@@ -50,13 +86,18 @@ export default function Dashboard() {
           <div className="pt-24 space-y-12">
             <OverviewCards stats={data.stats} />
             <InsightsPanel insights={data.insights} />
-            <ChartsSection 
-              dataPoints={data.dataPoints} 
+            <ChartsSection
+              dataPoints={data.dataPoints}
               stats={data.stats}
             />
             <DataExplorer dataPoints={data.dataPoints} />
           </div>
-        ) : null}
+        ) : (
+          // No data: show upload UI
+          <div className="pt-24">
+            <FileUpload onDataParsed={handleDataParsed} isLoading={isLoading} setIsLoading={setIsLoading} />
+          </div>
+        )}
       </main>
     </div>
   );

@@ -16,8 +16,8 @@ export function FileUpload({ onDataParsed, isLoading, setIsLoading }: FileUpload
   const { toast } = useToast();
 
   const handleFile = useCallback(async (file: File) => {
-    if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
-      setError("Please upload an Excel file (.xlsx or .xls)");
+    if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls') && !file.name.endsWith('.csv')) {
+      setError("Please upload an Excel or CSV file (.xlsx, .xls, .csv)");
       return;
     }
 
@@ -25,30 +25,20 @@ export function FileUpload({ onDataParsed, isLoading, setIsLoading }: FileUpload
     setIsLoading(true);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const response = await fetch('/api/parse-excel', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to parse file');
-      }
-
-      const data: ParsedData = await response.json();
+      // parse in-browser
+      const { parseFile } = await import('@/lib/parseExcel');
+      const data: ParsedData = await parseFile(file as File);
       onDataParsed(data, file.name);
-      
+
       toast({
-        title: "File uploaded successfully",
+        title: "File parsed successfully",
         description: `Analyzed ${data.dataPoints.length} data points from ${file.name}`,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to parse file");
       toast({
         variant: "destructive",
-        title: "Upload failed",
+        title: "Parsing failed",
         description: "Please check your file format and try again",
       });
     } finally {
@@ -59,7 +49,7 @@ export function FileUpload({ onDataParsed, isLoading, setIsLoading }: FileUpload
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    
+
     const file = e.dataTransfer.files[0];
     if (file) {
       handleFile(file);
@@ -95,11 +85,10 @@ export function FileUpload({ onDataParsed, isLoading, setIsLoading }: FileUpload
       </div>
 
       <Card
-        className={`w-full max-w-2xl transition-all duration-200 ${
-          isDragging 
-            ? 'border-primary bg-primary/5' 
-            : 'border-dashed border-2'
-        } ${isLoading ? 'opacity-50 pointer-events-none' : 'hover-elevate cursor-pointer'}`}
+        className={`w-full max-w-2xl transition-all duration-200 ${isDragging
+          ? 'border-primary bg-primary/5'
+          : 'border-dashed border-2'
+          } ${isLoading ? 'opacity-50 pointer-events-none' : 'hover-elevate cursor-pointer'}`}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -108,13 +97,13 @@ export function FileUpload({ onDataParsed, isLoading, setIsLoading }: FileUpload
         <label className="block p-12 cursor-pointer">
           <input
             type="file"
-            accept=".xlsx,.xls"
+            accept=".xlsx,.xls,.csv"
             onChange={handleFileInput}
             className="hidden"
             disabled={isLoading}
             data-testid="input-file"
           />
-          
+
           <div className="flex flex-col items-center gap-6">
             <div className="relative">
               <div className="absolute inset-0 bg-primary/20 blur-2xl rounded-full" />
