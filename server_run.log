@@ -1,0 +1,9 @@
+﻿Fetching and parsing Google Sheet on startup...
+Available sheets: [ '2025', 'stats', 'dashboard', 'history', 'backup' ]
+History sheet columns - Date:0, J:4, A:5, M:6
+Parsed 1096 points from history sheet
+Backup sheet has 3 date columns at indices: [ 0, 4, 8 ]
+Parsed 732 points from backup sheet
+Total unique data points: 1025 (filtered 71 future dates)
+Successfully parsed 1025 data points
+5:46:41 PM [express] serving on 127.0.0.1:5000

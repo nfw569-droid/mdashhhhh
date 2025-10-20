@@ -15,22 +15,17 @@ export default function Dashboard() {
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    // Try to fetch the static Excel file from attached_assets via the client build
-    // In development Vite will serve the file from /attached_assets/...
+    // Try to fetch parsed data from server API (which fetches the Google Sheet)
     const tryLoad = async () => {
       try {
         setIsLoading(true);
-        const base = (import.meta as any).env?.BASE_URL || '/';
-        const url = `${base}attached_assets/23-24data_1760901829734.xlsx`;
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error('Static asset not available');
-        const buffer = await resp.arrayBuffer();
-        const { parseExcelArrayBuffer } = await import('@/lib/parseExcel');
-        const parsed = await parseExcelArrayBuffer(buffer);
+        const resp = await fetch('http://localhost:5000/api/data');
+        if (!resp.ok) throw new Error('Failed to fetch data from server');
+        const parsed = await resp.json() as ParsedData;
         setData(parsed);
       } catch (e) {
-        // ignore and let user upload
-        setError(null);
+        console.error('Failed to fetch data:', e);
+        setError(e instanceof Error ? e : new Error('Failed to fetch data from server'));
       } finally {
         setIsLoading(false);
       }

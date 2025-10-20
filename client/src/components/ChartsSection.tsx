@@ -77,11 +77,8 @@ export function ChartsSection({ dataPoints, stats }: ChartsSectionProps) {
   // Zero-days per person (number of days with count === 0 in the analysis window)
   const zeroDaysData = (() => {
     if (!dataPoints || dataPoints.length === 0) return [{ person: 'J', zeros: 0 }, { person: 'A', zeros: 0 }, { person: 'M', zeros: 0 }];
-    const firstDateOrig = new Date(dataPoints[0].date);
-    const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
-    const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
-    const capEnd = new Date(2025, 9, 19);
-    const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+    const analysisStart = new Date(2023, 6, 10); // 2023-07-10
+    const analysisEnd = new Date(); analysisEnd.setHours(23, 59, 59, 999);
     const map: { [iso: string]: DataPoint } = {};
     dataPoints.forEach(d => map[d.date] = d);
     let jZeros = 0, aZeros = 0, mZeros = 0;
@@ -108,16 +105,12 @@ export function ChartsSection({ dataPoints, stats }: ChartsSectionProps) {
 
   // Day of week aggregation
   const dayOfWeekCounts = (() => {
-    const dayNamesFull = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     const dayNamesShort = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const days: Record<string, number> = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
     if (dataPoints.length === 0) return dayNamesShort.map(d => ({ day: d, total: 0 }));
 
-    const firstDateOrig = new Date(dataPoints[0].date);
-    const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
-    const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
-    const capEnd = new Date(2025, 9, 19);
-    const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+    const analysisStart = new Date(2023, 6, 10);
+    const analysisEnd = new Date(); analysisEnd.setHours(23, 59, 59, 999);
     const map: { [iso: string]: DataPoint } = {};
     dataPoints.forEach(d => map[d.date] = d);
     for (let d = new Date(analysisStart); d <= analysisEnd; d.setDate(d.getDate() + 1)) {
@@ -413,10 +406,16 @@ export function ChartsSection({ dataPoints, stats }: ChartsSectionProps) {
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={(() => {
                     const days: Record<string, number> = { Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 };
-                    dataPoints.forEach(d => {
-                      const dow = new Date(d.date).toLocaleDateString('en-US', { weekday: 'short' });
-                      days[dow as keyof typeof days] = (days[dow as keyof typeof days] || 0) + d.J + d.A + d.M;
-                    });
+                    const analysisStart = new Date(2023, 6, 10);
+                    const analysisEnd = new Date(); analysisEnd.setHours(23, 59, 59, 999);
+                    const map: Record<string, DataPoint> = {};
+                    dataPoints.forEach(d => map[d.date] = d);
+                    for (let d = new Date(analysisStart); d <= analysisEnd; d.setDate(d.getDate() + 1)) {
+                      const iso = d.toISOString().split('T')[0];
+                      const entry = map[iso] || { date: iso, J: 0, A: 0, M: 0 };
+                      const dow = new Date(iso).toLocaleDateString('en-US', { weekday: 'short' });
+                      days[dow as keyof typeof days] = (days[dow as keyof typeof days] || 0) + entry.J + entry.A + entry.M;
+                    }
                     return Object.entries(days).map(([day, total]) => ({ day, total }));
                   })()} {...chartConfig}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />

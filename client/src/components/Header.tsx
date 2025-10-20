@@ -1,6 +1,7 @@
-import { Upload, Sun, Moon } from "lucide-react";
+import { Upload, Sun, Moon, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
+import { useRefreshStatus } from "@/hooks/use-refresh-status";
 
 interface HeaderProps {
   fileName: string;
@@ -9,6 +10,7 @@ interface HeaderProps {
 }
 
 export function Header({ fileName, onReset, hasData }: HeaderProps) {
+  const { status } = useRefreshStatus();
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
       return (localStorage.getItem('theme') as 'light' | 'dark') || 'light';
@@ -28,13 +30,21 @@ export function Header({ fileName, onReset, hasData }: HeaderProps) {
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center gap-4">
             <h1 className="text-xl font-semibold tracking-tight">
-              Data Analysis Dashboard
+              Muth Analysis Dashboard
             </h1>
-            {fileName && (
-              <span className="text-sm text-muted-foreground">
-                {fileName}
-              </span>
-            )}
+            <div className="flex flex-col">
+              {fileName && (
+                <span className="text-sm text-muted-foreground">
+                  {fileName}
+                </span>
+              )}
+              {status && (
+                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                  <RefreshCw className="h-3 w-3" />
+                  Last updated: {new Date(status.lastRefresh).toLocaleString()}
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-2">

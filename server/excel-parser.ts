@@ -1,28 +1,75 @@
-import XLSX from 'xlsx';
-import * as path from 'path';
-import * as fs from 'fs';
-import type { DataPoint, ParsedData, PersonStats, Insight } from "@shared/schema";
+import * as XLSX from 'xlsx';
+import type { DataPoint, ParsedData, PersonStats, Insight } from '@shared/schema';
 
-export async function parseExcelFile(): Promise<ParsedData> {
-  const filePath = path.join(process.cwd(), 'attached_assets', '23-24data_1760901829734.xlsx');
+// Default Google Sheet ID (can be overridden with GOOGLE_SHEET_ID env var)
+const DEFAULT_SHEET_ID = '1ySZREUibTSLKv8YgJ08wo-FJlBjPrB86RJ9lWpZnH1k';
 
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`Excel file not found at ${filePath}`);
+// Fixed analysis window start per request: 10 July 2023 (month index 6)
+const ANALYSIS_START = new Date(2023, 6, 10);
+
+function parseExcelDate(dateValue: any): Date | null {
+  if (!dateValue && dateValue !== 0) return null;
+  if (dateValue instanceof Date) return dateValue;
+  // Excel serial date (number) fallback
+  if (typeof dateValue === 'number') {
+    // Prefer XLSX.SSF.parse_date_code when available
+    const ssf: any = (XLSX as any).SSF;
+    if (ssf && typeof ssf.parse_date_code === 'function') {
+      try {
+        const excelDate = ssf.parse_date_code(dateValue);
+        if (excelDate && excelDate.y) {
+          return new Date(Date.UTC(excelDate.y, excelDate.m - 1, excelDate.d));
+        }
+      } catch (err) {
+        // fall through to numeric conversion
+      }
+    }
+
+    // Fallback conversion (handles Excel 1900 leap-year bug by adjusting if serial > 60)
+    const serial = dateValue;
+    const epoch = Date.UTC(1899, 11, 30); // Excel epoch
+    const days = serial > 60 ? serial - 1 : serial; // Excel bug: 1900 is treated as leap year
+    const ms = Math.round(days * 24 * 60 * 60 * 1000);
+    return new Date(epoch + ms);
   }
 
-  const workbook = XLSX.readFile(filePath);
+  if (typeof dateValue === 'string') {
+    const d = new Date(dateValue);
+    if (!isNaN(d.getTime())) return d;
+    return null;
+  }
+
+  return null;
+}
+
+async function fetchWorkbookFromGoogleSheet(sheetId: string): Promise<XLSX.WorkBook> {
+  const id = sheetId || DEFAULT_SHEET_ID;
+  const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx`;
+
+  // Use global fetch (Node 18+ or browser). If not available, throw an informative error.
+  const fetchFn = (globalThis as any).fetch as ((input: RequestInfo, init?: RequestInit) => Promise<Response>) | undefined;
+  if (!fetchFn) {
+    throw new Error('No fetch implementation available. Run on Node 18+ or install a global fetch polyfill (e.g. node-fetch).');
+  }
+  const res = await fetchFn(url as any);
+  if (!res.ok) throw new Error(`Failed to fetch Google Sheet: ${res.status} ${res.statusText}`);
+  const buffer = await res.arrayBuffer();
+  const workbook = XLSX.read(Buffer.from(buffer), { type: 'buffer' } as any);
+  return workbook;
+}
+
+export async function parseExcelFile(): Promise<ParsedData> {
+  const sheetId = process.env.GOOGLE_SHEET_ID || DEFAULT_SHEET_ID;
+  const workbook = await fetchWorkbookFromGoogleSheet(sheetId);
 
   console.log('Available sheets:', workbook.SheetNames);
 
-  // Parse history sheet (main data source with sequential dates)
+  // Parse history and backup (same logic as before)
   const historyData = parseHistorySheet(workbook);
   console.log(`Parsed ${historyData.length} points from history sheet`);
-
-  // Parse backup sheet (has 2023, 2024, 2025 data in columns)
   const backupData = parseBackupSheet(workbook);
   console.log(`Parsed ${backupData.length} points from backup sheet`);
 
-  // Merge data and combine duplicate dates by summing counts
   const combinedMap: Record<string, { date: string; J: number; A: number; M: number }> = {};
   [...historyData, ...backupData].forEach(item => {
     if (!combinedMap[item.date]) combinedMap[item.date] = { date: item.date, J: 0, A: 0, M: 0 };
@@ -31,31 +78,25 @@ export async function parseExcelFile(): Promise<ParsedData> {
     combinedMap[item.date].M += Number(item.M || 0);
   });
 
-  // Sorted unique data points (one entry per date)
   const uniqueData = Object.values(combinedMap).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
   // Filter out future dates (dates after today)
   const today = new Date();
-  today.setHours(23, 59, 59, 999); // End of today
+  today.setHours(23, 59, 59, 999);
   const validData = uniqueData.filter(d => new Date(d.date) <= today);
 
   console.log(`Total unique data points: ${validData.length} (filtered ${uniqueData.length - validData.length} future dates)`);
 
-  // Compute statistics
   const stats = computeStatistics(validData);
-
-  // Generate insights
   const insights = generateInsights(validData, stats);
 
-  // Align returned dateRange with the analysis window used in computeStatistics:
-  const firstDateOrig = new Date(validData[0].date);
-  const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
-  const lastDateOrig = new Date(validData[validData.length - 1].date);
-  const capEnd = new Date(2025, 9, 19);
-  const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+  // Analysis window end should be today's date (inclusive). This matches requirement:
+  // calculations are from 2023-07-10 through today's date only.
+  const analysisEnd = new Date();
+  analysisEnd.setHours(23, 59, 59, 999);
 
   const dateRange = {
-    start: analysisStart.toISOString().split('T')[0],
+    start: ANALYSIS_START.toISOString().split('T')[0],
     end: analysisEnd.toISOString().split('T')[0],
   };
 
@@ -115,16 +156,7 @@ function parseHistorySheet(workbook: XLSX.WorkBook): DataPoint[] {
         continue;
       }
     } else {
-      // Parse Excel serial date
-      if (typeof dateValue === 'number') {
-        const excelDate = XLSX.SSF.parse_date_code(dateValue);
-        parsedDate = new Date(Date.UTC(excelDate.y, excelDate.m - 1, excelDate.d));
-      } else if (typeof dateValue === 'string') {
-        parsedDate = new Date(dateValue);
-      } else if (dateValue instanceof Date) {
-        parsedDate = dateValue;
-      }
-
+      parsedDate = parseExcelDate(dateValue);
       if (!parsedDate || isNaN(parsedDate.getTime())) {
         continue;
       }
@@ -195,13 +227,7 @@ function parseBackupSheet(workbook: XLSX.WorkBook): DataPoint[] {
           continue;
         }
       } else {
-        if (typeof dateValue === 'number') {
-          const excelDate = XLSX.SSF.parse_date_code(dateValue);
-          parsedDate = new Date(Date.UTC(excelDate.y, excelDate.m - 1, excelDate.d));
-        } else if (typeof dateValue === 'string') {
-          parsedDate = new Date(dateValue);
-        }
-
+        parsedDate = parseExcelDate(dateValue);
         if (!parsedDate || isNaN(parsedDate.getTime())) {
           continue;
         }
@@ -254,30 +280,31 @@ function computeStatistics(dataPoints: DataPoint[]): {
     return stats;
   }
 
-  // Determine analysis window: start at the month-start of first data point,
-  // and cap the end at 2025-10-19 as requested.
-  const firstDateOrig = new Date(dataPoints[0].date);
-  const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
-  const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
-  const capEnd = new Date(2025, 9, 19); // October 19, 2025 (month is 0-based)
-  const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
-
-  // Use analysisEnd as the "now" reference so current week/month/year are relative to dataset end
+  // Determine analysis window: use fixed analysis start (ANALYSIS_START) per requirements
+  // Analysis end is today's date (inclusive) — calculations cover 2023-07-10 -> today
+  const analysisStart = new Date(ANALYSIS_START); // clone to avoid mutation
+  const analysisEnd = new Date();
+  analysisEnd.setHours(23, 59, 59, 999);
   const now = new Date(analysisEnd);
 
-  // Current month and week boundaries relative to analysisEnd
+  // Get the current month's boundaries (1st to last day)
   const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - 6);
-  weekStart.setHours(0, 0, 0, 0);
-  const yearStartCandidate = new Date(now.getFullYear(), 0, 1);
-  const yearStart = analysisStart > yearStartCandidate ? analysisStart : yearStartCandidate;
 
-  // create map date -> {J,A,M}
+  // Get the most recent Monday (for week start)
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7)); // Calculate days to subtract to get to Monday
+  weekStart.setHours(0, 0, 0, 0);
+  // Year totals should be calculated from the analysisStart (2023-07-10) onward
+  const yearStart = new Date(analysisStart);
+
+  // create map date -> {J,A,M} but only include entries within analysis window
   const map: { [iso: string]: { J: number; A: number; M: number } } = {};
   dataPoints.forEach(d => {
-    map[d.date] = { J: d.J, A: d.A, M: d.M };
+    const dt = new Date(d.date);
+    if (dt >= analysisStart && dt <= analysisEnd) {
+      map[d.date] = { J: d.J, A: d.A, M: d.M };
+    }
   });
 
   // Build timeline from analysisStart to analysisEnd (inclusive)
@@ -431,11 +458,9 @@ function generateInsights(dataPoints: DataPoint[], stats: {
   const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   const dayOfWeekCounts: { [key: string]: number } = { Monday: 0, Tuesday: 0, Wednesday: 0, Thursday: 0, Friday: 0, Saturday: 0, Sunday: 0 };
   if (dataPoints.length > 0) {
-    const firstDateOrig = new Date(dataPoints[0].date);
     const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
-    const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
-    const capEnd = new Date(2025, 9, 19);
-    const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+    const analysisEnd = lastDateOrig > new Date(2025, 9, 19) ? new Date(2025, 9, 19) : lastDateOrig;
+    const analysisStart = new Date(ANALYSIS_START); // use fixed start
     const map: { [iso: string]: DataPoint } = {};
     dataPoints.forEach(d => map[d.date] = d);
     for (let d = new Date(analysisStart); d <= analysisEnd; d.setDate(d.getDate() + 1)) {
@@ -460,18 +485,40 @@ function generateInsights(dataPoints: DataPoint[], stats: {
     metric: `${peakDayOfWeek.count} total`,
   });
 
-  // Recent trend
-  const last7Days = dataPoints.slice(-7);
-  const prev7Days = dataPoints.slice(-14, -7);
-  const recentTotal = last7Days.reduce((sum, d) => sum + d.J + d.A + d.M, 0);
-  const previousTotal = prev7Days.reduce((sum, d) => sum + d.J + d.A + d.M, 0);
-  const change = recentTotal - previousTotal;
+  // Recent trend - use complete Monday-Sunday weeks
+  const today = new Date();
+  // Find last Sunday
+  const lastSunday = new Date(today);
+  lastSunday.setDate(today.getDate() - today.getDay());
+  lastSunday.setHours(23, 59, 59, 999);
 
-  if (Math.abs(change) > 5) {
+  // Find the Monday 7 days before that (for previous week)
+  const prevWeekMonday = new Date(lastSunday);
+  prevWeekMonday.setDate(lastSunday.getDate() - 13); // Go back 13 days to get to Monday
+  prevWeekMonday.setHours(0, 0, 0, 0);
+
+  // Get complete weeks (Monday-Sunday)
+  const thisWeekData = dataPoints.filter(d => {
+    const date = new Date(d.date);
+    const prevMonday = new Date(lastSunday);
+    prevMonday.setDate(lastSunday.getDate() - 6);
+    return date >= prevMonday && date <= lastSunday;
+  });
+
+  const prevWeekData = dataPoints.filter(d => {
+    const date = new Date(d.date);
+    const prevSunday = new Date(prevWeekMonday);
+    prevSunday.setDate(prevWeekMonday.getDate() + 6);
+    return date >= prevWeekMonday && date <= prevSunday;
+  });
+
+  const recentTotal = thisWeekData.reduce((sum, d) => sum + d.J + d.A + d.M, 0);
+  const previousTotal = prevWeekData.reduce((sum, d) => sum + d.J + d.A + d.M, 0);
+  const change = recentTotal - previousTotal; if (Math.abs(change) > 5) {
     insights.push({
       type: change > 0 ? 'pattern' : 'anomaly',
       title: change > 0 ? 'Activity increasing recently' : 'Activity decreasing recently',
-      description: `Overall activity ${change > 0 ? 'increased' : 'decreased'} by ${Math.abs(change)} in the last week compared to the previous week. Compares the last 7 calendar days vs the previous 7-day block.`,
+      description: `Overall activity ${change > 0 ? 'increased' : 'decreased'} by ${Math.abs(change)} in the last complete week (Monday-Sunday) compared to the previous week.`,
       metric: `${change > 0 ? '+' : ''}${change}`,
     });
   }

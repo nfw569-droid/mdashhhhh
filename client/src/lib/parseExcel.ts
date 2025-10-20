@@ -1,6 +1,8 @@
 import * as XLSX from 'xlsx';
 import type { ParsedData, DataPoint, PersonStats, Insight } from '@shared/schema';
 
+const ANALYSIS_START = new Date(2023, 6, 10); // July 10, 2023
+
 function parseHistorySheet(workbook: XLSX.WorkBook): DataPoint[] {
     const sheet = workbook.Sheets['history'];
     if (!sheet) return [];
@@ -131,19 +133,18 @@ function computeStatistics(dataPoints: DataPoint[]) {
         return stats as { J: PersonStats; A: PersonStats; M: PersonStats };
     }
 
-    const firstDateOrig = new Date(dataPoints[0].date);
-    const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
-    const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
-    const capEnd = new Date(2025, 9, 19);
-    const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+    const analysisStart = new Date(ANALYSIS_START);
+    const analysisEnd = new Date();
+    analysisEnd.setHours(23, 59, 59, 999);
     const now = new Date(analysisEnd);
     const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    // Get the most recent Monday for week start (Monday-Sunday week)
     const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - 6);
+    weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7)); // Get back to Monday
     weekStart.setHours(0, 0, 0, 0);
-    const yearStartCandidate = new Date(now.getFullYear(), 0, 1);
-    const yearStart = analysisStart > yearStartCandidate ? analysisStart : yearStartCandidate;
+    const yearStart = new Date(analysisStart);
 
     const map: { [iso: string]: { J: number; A: number; M: number } } = {};
     dataPoints.forEach(d => { map[d.date] = { J: d.J, A: d.A, M: d.M }; });
@@ -226,11 +227,9 @@ function generateInsights(dataPoints: DataPoint[], stats: { J: PersonStats; A: P
     const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     const dayOfWeekCounts: { [key: string]: number } = { Monday: 0, Tuesday: 0, Wednesday: 0, Thursday: 0, Friday: 0, Saturday: 0, Sunday: 0 };
     if (dataPoints.length > 0) {
-        const firstDateOrig = new Date(dataPoints[0].date);
-        const lastDateOrig = new Date(dataPoints[dataPoints.length - 1].date);
-        const analysisStart = new Date(firstDateOrig.getFullYear(), firstDateOrig.getMonth(), 1);
-        const capEnd = new Date(2025, 9, 19);
-        const analysisEnd = lastDateOrig > capEnd ? capEnd : lastDateOrig;
+        const analysisEnd = new Date();
+        analysisEnd.setHours(23, 59, 59, 999);
+        const analysisStart = new Date(ANALYSIS_START);
         const map: { [iso: string]: DataPoint } = {};
         dataPoints.forEach(d => map[d.date] = d);
         for (let d = new Date(analysisStart); d <= analysisEnd; d.setDate(d.getDate() + 1)) {
@@ -332,7 +331,8 @@ export async function parseExcelArrayBuffer(buffer: ArrayBuffer): Promise<Parsed
     if (validData.length === 0) throw new Error('No valid data parsed from workbook');
     const stats = computeStatistics(validData);
     const insights = generateInsights(validData, stats);
-    const dateRange = { start: validData[0].date, end: validData[validData.length - 1].date };
+    const analysisEnd = new Date(); analysisEnd.setHours(23, 59, 59, 999);
+    const dateRange = { start: ANALYSIS_START.toISOString().split('T')[0], end: analysisEnd.toISOString().split('T')[0] };
     return { dataPoints: validData, stats, insights, dateRange } as ParsedData;
 }
 
@@ -356,7 +356,8 @@ export async function parseFile(file: File): Promise<ParsedData> {
         const validData = uniqueData.filter((d) => new Date(d.date) <= today);
         const stats = computeStatistics(validData);
         const insights = generateInsights(validData, stats);
-        const dateRange = { start: validData[0].date, end: validData[validData.length - 1].date };
+        const analysisEnd = new Date(); analysisEnd.setHours(23, 59, 59, 999);
+        const dateRange = { start: ANALYSIS_START.toISOString().split('T')[0], end: analysisEnd.toISOString().split('T')[0] };
         return { dataPoints: validData, stats, insights, dateRange } as ParsedData;
     }
 
